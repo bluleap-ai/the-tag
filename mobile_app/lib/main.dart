@@ -5,14 +5,21 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
 import 'services/ble_image_transfer.dart';
+import 'services/find_my_device_service.dart';
 import 'services/image_converter.dart';
+import 'pages/find_my_device_page.dart';
 
-void main() {
-  runApp(const VeeaTagApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final findMyService = FindMyDeviceService();
+  await findMyService.load();
+  runApp(VeeaTagApp(findMyService: findMyService));
 }
 
 class VeeaTagApp extends StatelessWidget {
-  const VeeaTagApp({super.key});
+  final FindMyDeviceService findMyService;
+
+  const VeeaTagApp({super.key, required this.findMyService});
 
   @override
   Widget build(BuildContext context) {
@@ -29,13 +36,15 @@ class VeeaTagApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: const HomePage(),
+      home: HomePage(findMyService: findMyService),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  final FindMyDeviceService findMyService;
+
+  const HomePage({super.key, required this.findMyService});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -106,6 +115,17 @@ class _HomePageState extends State<HomePage> {
     _addLog('[APP] User selected device: "${device.platformName}" (${device.remoteId})');
     try {
       await _ble.connect(device);
+      // Track this device in the Find My Device service.
+      final match = _scanResults.where(
+        (r) => r.device.remoteId == device.remoteId,
+      );
+      final rssi = match.isNotEmpty ? match.first.rssi : 0;
+      await widget.findMyService.upsert(TrackedDevice(
+        address: device.remoteId.toString(),
+        name: device.platformName.isNotEmpty ? device.platformName : 'the-tag',
+        lastSeen: DateTime.now(),
+        lastRssi: rssi,
+      ));
     } catch (e) {
       _addLog('[APP] Connect error: $e');
     }
@@ -224,6 +244,19 @@ class _HomePageState extends State<HomePage> {
         title: const Text('Veea Tag'),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.location_on_outlined),
+            tooltip: 'Find My Device',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => FindMyDevicePage(
+                  findMyService: widget.findMyService,
+                  ble: _ble,
+                ),
+              ),
+            ),
+          ),
           if (isConnected)
             IconButton(
               icon: const Icon(Icons.bluetooth_disabled),

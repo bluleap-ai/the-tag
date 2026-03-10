@@ -12,15 +12,17 @@ final Guid imageDataCharUuid =
 final Guid imageCtrlCharUuid =
     Guid('12345678-1234-5678-1234-56789abcdef2');
 
-const int cmdStart = 0x01;
+const int cmdStart  = 0x01;
 const int cmdCommit = 0x02;
 const int cmdCancel = 0x03;
+const int cmdFind   = 0x04; // Triggers LED blink on the tag to help locate it
 
-const int statusReady = 0x00;
-const int statusProgress = 0x01;
+const int statusReady      = 0x00;
+const int statusProgress   = 0x01;
 const int statusDisplaying = 0x10;
-const int statusDone = 0x11;
-const int statusError = 0xFF;
+const int statusDone       = 0x11;
+const int statusFinding    = 0x20; // Find-device LED blink started
+const int statusError      = 0xFF;
 
 const _errorNames = {
   0x01: 'INVALID_SIZE',
@@ -258,6 +260,9 @@ class BleImageTransfer {
         _log('[NOTIFY] DISPLAYING: e-ink refresh started');
         _setState(TransferState.displaying);
         break;
+      case statusFinding:
+        _log('[NOTIFY] FINDING: tag is blinking its LED');
+        break;
       case statusDone:
         _log('[NOTIFY] DONE: display refresh complete');
         _setState(TransferState.done);
@@ -328,6 +333,18 @@ class BleImageTransfer {
     _log('[SEND] Writing COMMIT cmd [0x02]');
     await _ctrlChar!.write([cmdCommit]);
     _log('[SEND] COMMIT written, waiting for firmware...');
+  }
+
+  /// Send the FIND command to the connected tag, triggering a 5-second LED
+  /// blink so the user can physically locate the device.
+  Future<void> sendFindCommand() async {
+    if (_ctrlChar == null) {
+      _log('[FIND] ERROR: not connected');
+      throw Exception('Not connected');
+    }
+    _log('[FIND] Writing FIND cmd [0x${cmdFind.toRadixString(16)}]');
+    await _ctrlChar!.write([cmdFind]);
+    _log('[FIND] FIND cmd written, tag LED should start blinking');
   }
 
   Future<void> disconnect() async {

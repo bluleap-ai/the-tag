@@ -14,6 +14,7 @@
 
 #include "ble_backend.h"
 #include "ble_image_service.h"
+#include "fast_pair_service.h"
 #include "image_boaviet.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
@@ -51,11 +52,18 @@ static K_SEM_DEFINE(image_ready_sem, 0, 1);
 static const uint8_t *pending_image_data;
 static uint16_t pending_image_size;
 
+static K_SEM_DEFINE(find_device_sem, 0, 1);
+
 static void on_ble_image_ready(const uint8_t *data, uint16_t size)
 {
     pending_image_data = data;
     pending_image_size = size;
     k_sem_give(&image_ready_sem);
+}
+
+static void on_ble_find_device(void)
+{
+    k_sem_give(&find_device_sem);
 }
 
 /* Helper functions */
@@ -231,8 +239,12 @@ int main(void)
     
     LOG_INF("=== The-Tag Firmware ===");
     
+    /* Fast Pair must register its settings handler BEFORE settings_load()
+     * is called inside ble_backend_init(). */
+    fast_pair_service_init();
     ble_backend_init();
     ble_image_service_init(on_ble_image_ready);
+    ble_image_service_set_find_cb(on_ble_find_device);
 
     /* LED Init */
     if (!gpio_is_ready_dt(&led)) {
@@ -311,6 +323,17 @@ int main(void)
             ble_image_notify_display_done();
             LOG_INF("BLE image displayed successfully");
         }
+
+        /* Handle find-device command: blink LED rapidly for 5 seconds. */
+        if (k_sem_take(&find_device_sem, K_NO_WAIT) == 0) {
+            LOG_INF("Find-device: blinking LED for 5 seconds");
+            for (int i = 0; i < 20; i++) {
+                gpio_pin_toggle_dt(&led);
+                k_msleep(250);
+            }
+            LOG_INF("Find-device: blink complete");
+        }
+
         gpio_pin_toggle_dt(&led);
     }
 

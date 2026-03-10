@@ -14,6 +14,7 @@ static uint16_t image_offset;
 static uint16_t image_expected_size;
 static bool transfer_active;
 static ble_image_ready_cb_t ready_callback;
+static ble_find_device_cb_t find_callback;
 
 static struct bt_uuid_128 image_svc_uuid = BT_UUID_INIT_128(BLE_IMAGE_SERVICE_UUID);
 static struct bt_uuid_128 image_data_uuid = BT_UUID_INIT_128(BLE_IMAGE_DATA_CHAR_UUID);
@@ -158,6 +159,14 @@ static ssize_t ctrl_write_cb(struct bt_conn *conn, const struct bt_gatt_attr *at
         LOG_INF("Image transfer cancelled");
         break;
 
+    case IMG_CMD_FIND:
+        LOG_INF("Find-device command received: starting LED blink");
+        send_status(IMG_STATUS_FINDING);
+        if (find_callback) {
+            find_callback();
+        }
+        break;
+
     default:
         LOG_WRN("Unknown control command: 0x%02x", cmd[0]);
         return BT_GATT_ERR(BT_ATT_ERR_NOT_SUPPORTED);
@@ -169,9 +178,15 @@ static ssize_t ctrl_write_cb(struct bt_conn *conn, const struct bt_gatt_attr *at
 void ble_image_service_init(ble_image_ready_cb_t callback)
 {
     ready_callback = callback;
+    find_callback = NULL;
     transfer_active = false;
     image_offset = 0;
     LOG_INF("BLE Image Service initialized");
+}
+
+void ble_image_service_set_find_cb(ble_find_device_cb_t callback)
+{
+    find_callback = callback;
 }
 
 void ble_image_notify_display_done(void)

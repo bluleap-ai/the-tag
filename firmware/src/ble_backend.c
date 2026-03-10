@@ -5,16 +5,42 @@
 #include <zephyr/settings/settings.h>
 
 #include "ble_image_service.h"
+#include "fast_pair_service.h"
 
 LOG_MODULE_REGISTER(ble_backend);
 
+/*
+ * Advertisement data (31-byte limit):
+ *   - BT flags                   : 3 bytes
+ *   - Fast Pair service data 16  : 7 bytes  (UUID 0xFE2C + 3-byte model ID)
+ *
+ * The image-service UUID128 and device name live in the scan response so that
+ * the advertisement packet stays small enough to also carry Fast Pair data.
+ *
+ * Fast Pair service data format (per Google Fast Pair spec §2.1):
+ *   Byte 0-1 : Service UUID 0xFE2C in little-endian
+ *   Byte 2-4 : 24-bit Model ID (big-endian) when unprovisioned,
+ *              or beacon identifier when provisioned (GFDM mode)
+ */
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BLE_IMAGE_SERVICE_UUID),
+	/* Fast Pair service data: UUID 0xFE2C (LE) followed by model ID */
+	BT_DATA_BYTES(BT_DATA_SVC_DATA16,
+		      0x2C, 0xFE,                           /* UUID 0xFE2C */
+		      (FAST_PAIR_MODEL_ID >> 16) & 0xFF,    /* Model ID byte 2 */
+		      (FAST_PAIR_MODEL_ID >>  8) & 0xFF,    /* Model ID byte 1 */
+		       FAST_PAIR_MODEL_ID        & 0xFF),   /* Model ID byte 0 */
 };
 
+/*
+ * Scan response data:
+ *   - Device name          : carries "the-tag" so the app can scan by name
+ *   - Image service UUID128: allows UUID-based scanning as a fallback
+ */
 static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME,
+		sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+	BT_DATA_BYTES(BT_DATA_UUID128_SOME, BLE_IMAGE_SERVICE_UUID),
 };
 
 static void start_adv(void)
