@@ -136,6 +136,109 @@ Phone                              Firmware
 
 ---
 
+## 🍎 Apple Find My (OpenHaystack)
+
+The firmware supports Apple's **Find My** network via the
+[OpenHaystack](https://github.com/seemoo-lab/openhaystack) Offline Finding
+protocol.  When enabled, the device broadcasts a non-connectable BLE
+advertisement that nearby Apple devices silently forward to Apple's servers,
+allowing the tag to appear in the **Find My** app — no Apple SDK required.
+
+The feature runs as a **dedicated extended advertising set** (BLE 5.x) that
+coexists with the connectable image-transfer advertising set.
+
+### How it works
+
+```
+nRF54L15                   iPhone/Mac nearby          Apple servers
+    |                              |                        |
+    |-- OF advertisement -------->|                        |
+    |   (non-connectable, ~1 s)   |-- encrypted report --->|
+    |                              |                        |
+                                                           Find My app
+                                                           shows location
+```
+
+1. The device derives a **random-static BLE address** from the first 6 bytes
+   of a 28-byte compressed EC P-224 public key.
+2. It broadcasts an **Apple manufacturer-specific advertisement** (company ID
+   `0x004C`, type `0x12`) containing the remaining key bytes and a key hint.
+3. Apple devices in range encrypt the tag's location with the public key and
+   upload the report anonymously to Apple's servers.
+4. The owner retrieves and decrypts the location report using the matching
+   **private key** in the OpenHaystack desktop app.
+
+### Advertisement format (Offline Finding, type `0x12`)
+
+| Offset | Length | Value |
+|--------|--------|-------|
+| 0–1 | 2 | Apple company ID `0x4C 0x00` |
+| 2 | 1 | OF type `0x12` |
+| 3 | 1 | OF sub-length `0x19` (25 bytes) |
+| 4 | 1 | Status flags `0x00` |
+| 5–26 | 22 | `public_key[6..27]` |
+| 27 | 1 | `public_key[0] >> 6` (key hint) |
+| 28 | 1 | Reserved `0x00` |
+
+The BLE address is `public_key[0..5]` with the top 2 bits of byte 0 forced
+to `1` (random-static address type).
+
+### Key provisioning (production use)
+
+1. Install the [OpenHaystack](https://github.com/seemoo-lab/openhaystack)
+   desktop application on macOS.
+2. Create a new accessory and export its **28-byte compressed EC P-224 public
+   key** (displayed in the "Keys" column as a Base64 string).
+3. Decode the Base64 string and pass the resulting byte array to
+   `find_my_init()` instead of `NULL`:
+
+```c
+static const uint8_t my_public_key[FIND_MY_PUBLIC_KEY_SIZE] = {
+    /* paste your 28 key bytes here */
+};
+
+find_my_init(my_public_key);
+find_my_start();
+```
+
+4. Set `CONFIG_FIND_MY_DEMO_KEY=n` in `prj.conf` to disable the placeholder
+   key and ensure only your real key is used.
+
+> ⚠️ **The built-in demo key is a placeholder.**  It is NOT a valid EC P-224
+> point.  Apple devices will relay the advertisement, but the encrypted
+> location reports cannot be decrypted without a matching private key.  Always
+> provision a real key pair for production hardware.
+
+### Key rotation (production use)
+
+Apple requires key rotation every **~15 minutes** for privacy.  Pre-generate
+multiple key pairs with OpenHaystack, store them in flash, and call
+`find_my_rotate_key()` on a timer:
+
+```c
+/* Example: rotate key every 15 minutes */
+static const uint8_t keys[][FIND_MY_PUBLIC_KEY_SIZE] = { ... };
+static int key_index;
+
+void key_rotation_timer_handler(struct k_timer *t)
+{
+    key_index = (key_index + 1) % ARRAY_SIZE(keys);
+    find_my_rotate_key(keys[key_index]);
+}
+K_TIMER_DEFINE(key_timer, key_rotation_timer_handler, NULL);
+/* start timer: k_timer_start(&key_timer, K_MINUTES(15), K_MINUTES(15)); */
+```
+
+### Build configuration
+
+`CONFIG_FIND_MY=y` is the default.  To disable Find My entirely:
+
+```bash
+west build -b xiao_nrf54l15/nrf54l15/cpuapp the-tag -p -- -DCONFIG_FIND_MY=n
+```
+
+---
+
 ## 🚀 Roadmap
 
 ### 🔧 Core Features
@@ -143,7 +246,9 @@ Phone                              Firmware
 - [x] MCUboot integration
 
 ### 📡 Connectivity
+- [x] Apple Find My (OpenHaystack) Offline Finding advertising
 - [ ] BLE connection stability improvements
+- [ ] Find My key rotation timer (15-minute interval)
 
 ### 🔋 Power Management
 - [ ] Sleep mode optimization

@@ -14,6 +14,7 @@
 
 #include "ble_backend.h"
 #include "ble_image_service.h"
+#include "find_my.h"
 #include "image_boaviet.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
@@ -233,6 +234,19 @@ int main(void)
     
     ble_backend_init();
     ble_image_service_init(on_ble_image_ready);
+
+#ifdef CONFIG_FIND_MY
+    /* Start Apple Find My (OpenHaystack) advertising.
+     * Pass NULL to use the built-in demo key (CONFIG_FIND_MY_DEMO_KEY=y).
+     * In production, supply a real EC P-224 key generated with the
+     * OpenHaystack desktop app.
+     */
+    if (find_my_init(NULL) == 0) {
+        find_my_start();
+    } else {
+        LOG_WRN("Apple Find My init failed — continuing without Find My");
+    }
+#endif /* CONFIG_FIND_MY */
 
     /* LED Init */
     if (!gpio_is_ready_dt(&led)) {
