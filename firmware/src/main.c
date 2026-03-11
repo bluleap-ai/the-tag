@@ -14,6 +14,8 @@
 
 #include "ble_backend.h"
 #include "ble_image_service.h"
+#include "ble_audio_service.h"
+#include "mic_driver.h"
 #include "image_boaviet.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
@@ -233,6 +235,12 @@ int main(void)
     
     ble_backend_init();
     ble_image_service_init(on_ble_image_ready);
+    ble_audio_service_init();
+
+    int mic_err = mic_driver_init();
+    if (mic_err) {
+        LOG_WRN("Mic driver init failed (%d) – audio streaming unavailable", mic_err);
+    }
 
     /* LED Init */
     if (!gpio_is_ready_dt(&led)) {
