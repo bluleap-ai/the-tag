@@ -3,6 +3,8 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import 'lc3_decoder.dart';
+
 // ---------------------------------------------------------------------------
 // BLE UUID constants – must match firmware ble_audio_service.h
 // ---------------------------------------------------------------------------
@@ -188,32 +190,26 @@ class BleAudioService {
 
   // -------------------------------------------------------------------------
   // Build a WAV file from the buffered audio frames for playback.
-  //
-  // NOTE: The firmware transmits LC3-encoded audio frames.  A full
-  // implementation requires an LC3 decoder (platform channel) to convert
-  // the payloads to raw PCM before constructing the WAV file.  The stub
-  // below concatenates raw frame bytes so that the playback infrastructure
-  // compiles and runs; replace _decodeLc3Frames() with a real decoder.
+  // Uses native liblc3 decoder via FFI to convert LC3 → PCM S16.
   // -------------------------------------------------------------------------
 
-  Uint8List buildWavFromRecording() {
-    final pcmData = _decodeLc3Frames(_recordedFrames);
-    return _wrapInWav(pcmData);
-  }
+  Lc3Decoder? _lc3Decoder;
 
-  /// Stub LC3 → PCM decoder.
-  ///
-  /// TODO: Replace with a real LC3 decoder (e.g. via Dart FFI calling
-  /// liblc3, or a platform channel wrapping the OS LC3 decoder available
-  /// on Android 13+ / iOS 16+).
-  Uint8List _decodeLc3Frames(List<Uint8List> frames) {
-    // Concatenate raw frame payloads as a best-effort demo.
-    // Each frame is [AUDIO_FRAME_BYTES] bytes of LC3-encoded data.
-    final buf = BytesBuilder();
-    for (final frame in frames) {
-      buf.add(frame);
+  Uint8List buildWavFromRecording() {
+    _lc3Decoder ??= Lc3Decoder(
+      dtUs: 10000,  // 10 ms frames
+      srHz: audioSampleRate,
+    );
+    _lc3Decoder!.init();
+
+    try {
+      final pcmData = _lc3Decoder!.decodeFrames(_recordedFrames);
+      _log('[DECODE] Decoded ${_recordedFrames.length} LC3 frames '
+          '→ ${pcmData.length} bytes PCM');
+      return _wrapInWav(pcmData);
+    } finally {
+      _lc3Decoder!.dispose();
     }
-    return buf.toBytes();
   }
 
   static Uint8List _wrapInWav(Uint8List pcmBytes) {

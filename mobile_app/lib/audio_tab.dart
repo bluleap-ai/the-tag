@@ -124,6 +124,13 @@ class _AudioTabState extends State<AudioTab>
     _addLog('[APP] Stopping recording...');
     try {
       await _audio.stopRecording();
+      // Stop any ongoing playback from a previous session
+      await _player.stop();
+      await _player.seek(Duration.zero);
+      setState(() {
+        _playPosition = Duration.zero;
+        _playDuration = Duration.zero;
+      });
     } catch (e) {
       _addLog('[APP] Stop recording error: $e');
     }
@@ -313,7 +320,7 @@ class _AudioTabState extends State<AudioTab>
         const SizedBox(height: 12),
 
         // ── Playback ──────────────────────────────────────────────────────
-        if (hasFrames)
+        if (hasFrames && !isRecording)
           _SectionCard(
             title: 'Playback',
             icon: Icons.play_circle_outline,
