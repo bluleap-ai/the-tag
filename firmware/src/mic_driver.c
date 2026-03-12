@@ -2,6 +2,7 @@
 #include <zephyr/audio/dmic.h>
 #include <zephyr/logging/log.h>
 #include <lc3.h>
+#include <errno.h>
 #include <string.h>
 
 #include "mic_driver.h"
@@ -9,13 +10,21 @@
 
 LOG_MODULE_REGISTER(mic_driver, CONFIG_LOG_DEFAULT_LEVEL);
 
+enum mic_channel_side {
+    MIC_SIDE_LEFT,
+    MIC_SIDE_RIGHT,
+};
+
 /* ------------------------------------------------------------------ */
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
 #define MIC_PCM_BUF_SIZE  (AUDIO_PCM_SAMPLES_PER_FRAME * sizeof(int16_t)) /* 320 bytes */
-#define MIC_SLAB_BLOCKS   16 /* enough runway while LC3 encoder runs */
+#define MIC_SLAB_BLOCKS   32 /* keep DMIC RX queue from overflowing under BLE load */
 #define MIC_THREAD_STACK_SIZE 4096
+#define MIC_PROBE_FRAMES  3
+#define MIC_SILENCE_MEAN_ABS_THRESHOLD 16
+#define MIC_FRAME_LOG_INTERVAL 100
 
 /* ------------------------------------------------------------------ */
 /* Static storage                                                       */
@@ -28,6 +37,7 @@ K_MEM_SLAB_DEFINE_STATIC(mic_slab, MIC_PCM_BUF_SIZE, MIC_SLAB_BLOCKS, 4);
 static const struct device *mic_dev;
 static volatile bool running;
 static uint16_t frame_seq;
+static enum mic_channel_side mic_side = MIC_SIDE_LEFT;
 
 /* LC3 encoder state */
 static lc3_encoder_t lc3_encoder;
@@ -37,6 +47,99 @@ static uint8_t lc3_output_buf[AUDIO_FRAME_BYTES];
 /* Capture thread */
 static struct k_thread mic_thread;
 K_THREAD_STACK_DEFINE(mic_thread_stack, MIC_THREAD_STACK_SIZE);
+
+static uint16_t dmic_channel_map(enum mic_channel_side side)
+{
+    return (side == MIC_SIDE_LEFT)
+               ? dmic_build_channel_map(0, 0, PDM_CHAN_LEFT)
+               : dmic_build_channel_map(0, 0, PDM_CHAN_RIGHT);
+}
+
+static int dmic_configure_and_start(enum mic_channel_side side)
+{
+    struct pcm_stream_cfg streams[] = {
+        {
+            .pcm_rate = AUDIO_SAMPLE_RATE_HZ,
+            .pcm_width = 16,
+            .block_size = MIC_PCM_BUF_SIZE,
+            .mem_slab = &mic_slab,
+        },
+    };
+
+    struct dmic_cfg cfg = {
+        .io = {
+            .min_pdm_clk_freq = 1000000,
+            .max_pdm_clk_freq = 3500000,
+            .min_pdm_clk_dc = 40,
+            .max_pdm_clk_dc = 60,
+        },
+        .streams = streams,
+        .channel = {
+            .req_num_streams = 1,
+            .req_num_chan = AUDIO_CHANNELS,
+            .req_chan_map_lo = dmic_channel_map(side),
+        },
+    };
+
+    int err = dmic_configure(mic_dev, &cfg);
+    if (err) {
+        LOG_ERR("DMIC configure failed: %d", err);
+        return err;
+    }
+
+    err = dmic_trigger(mic_dev, DMIC_TRIGGER_START);
+    if (err) {
+        LOG_ERR("DMIC trigger START failed: %d", err);
+        return err;
+    }
+
+    return 0;
+}
+
+static uint32_t pcm_mean_abs(const int16_t *pcm, size_t samples)
+{
+    uint64_t sum = 0;
+
+    for (size_t i = 0; i < samples; i++) {
+        int32_t v = pcm[i];
+        if (v < 0) {
+            v = -v;
+        }
+        sum += (uint32_t)v;
+    }
+
+    return (uint32_t)(sum / samples);
+}
+
+static uint32_t probe_pcm_level(void)
+{
+    uint64_t sum = 0;
+    uint32_t valid = 0;
+
+    for (int i = 0; i < MIC_PROBE_FRAMES; i++) {
+        void *pcm_buf = NULL;
+        size_t pcm_size = MIC_PCM_BUF_SIZE;
+        int err = dmic_read(mic_dev, 0, &pcm_buf, &pcm_size, 300);
+
+        if (err) {
+            continue;
+        }
+
+        if (pcm_size >= MIC_PCM_BUF_SIZE) {
+            sum += pcm_mean_abs((const int16_t *)pcm_buf,
+                                AUDIO_PCM_SAMPLES_PER_FRAME);
+            valid++;
+        }
+
+        k_mem_slab_free(&mic_slab, pcm_buf);
+    }
+
+    if (valid == 0) {
+        return 0;
+    }
+
+    return (uint32_t)(sum / valid);
+}
 
 /* ------------------------------------------------------------------ */
 /* Capture thread                                                       */
@@ -56,12 +159,22 @@ static void mic_capture_thread(void *p1, void *p2, void *p3)
 
         int err = dmic_read(mic_dev, 0, &pcm_buf, &pcm_size, 2000);
         if (err) {
-            LOG_WRN("DMIC read error: %d", err);
+            if (err == -EAGAIN || err == -EINTR) {
+                LOG_DBG("DMIC read transient: %d", err);
+            } else {
+                LOG_WRN("DMIC read error: %d", err);
+            }
             k_msleep(1);
             continue;
         }
 
         LOG_DBG("PCM read ok (%u bytes)", (unsigned)pcm_size);
+
+        if (pcm_size < MIC_PCM_BUF_SIZE) {
+            LOG_WRN("Short PCM block (%u < %u)", (unsigned)pcm_size, (unsigned)MIC_PCM_BUF_SIZE);
+            k_mem_slab_free(&mic_slab, pcm_buf);
+            continue;
+        }
 
         /* Encode one 10 ms frame of 16-bit mono PCM to LC3 */
         err = lc3_encode(lc3_encoder,
@@ -73,8 +186,11 @@ static void mic_capture_thread(void *p1, void *p2, void *p3)
         if (err) {
             LOG_WRN("LC3 encode error: %d", err);
         } else {
-            LOG_INF("Audio frame %u sent (%u bytes)", frame_seq, AUDIO_FRAME_BYTES);
-            ble_audio_service_notify_frame(lc3_output_buf, AUDIO_FRAME_BYTES, frame_seq++);
+            const uint16_t seq = frame_seq++;
+            ble_audio_service_notify_frame(lc3_output_buf, AUDIO_FRAME_BYTES, seq);
+            if ((seq % MIC_FRAME_LOG_INTERVAL) == 0U) {
+                LOG_INF("Audio frame %u sent (%u bytes)", seq, AUDIO_FRAME_BYTES);
+            }
         }
 
         k_mem_slab_free(&mic_slab, pcm_buf);
@@ -118,39 +234,28 @@ void mic_driver_start(void)
         return;
     }
 
-    struct pcm_stream_cfg streams[] = {
-        {
-            .pcm_rate  = AUDIO_SAMPLE_RATE_HZ,
-            .pcm_width = 16,
-            .block_size = MIC_PCM_BUF_SIZE,
-            .mem_slab  = &mic_slab,
-        },
-    };
-
-    struct dmic_cfg cfg = {
-        .io = {
-            .min_pdm_clk_freq = 1000000,
-            .max_pdm_clk_freq = 3500000,
-            .min_pdm_clk_dc   = 40,
-            .max_pdm_clk_dc   = 60,
-        },
-        .streams = streams,
-        .channel = {
-            .req_num_streams = 1,
-            .req_num_chan    = AUDIO_CHANNELS,
-        },
-    };
-
-    int err = dmic_configure(mic_dev, &cfg);
+    int err = dmic_configure_and_start(mic_side);
     if (err) {
-        LOG_ERR("DMIC configure failed: %d", err);
         return;
     }
 
-    err = dmic_trigger(mic_dev, DMIC_TRIGGER_START);
-    if (err) {
-        LOG_ERR("DMIC trigger START failed: %d", err);
-        return;
+    uint32_t probe_level = probe_pcm_level();
+    LOG_INF("Mic probe on %s: mean_abs=%u",
+            (mic_side == MIC_SIDE_LEFT) ? "LEFT" : "RIGHT", probe_level);
+
+    if (probe_level <= MIC_SILENCE_MEAN_ABS_THRESHOLD && mic_side == MIC_SIDE_LEFT) {
+        LOG_WRN("Mic level too low on LEFT, retrying RIGHT channel");
+        (void)dmic_trigger(mic_dev, DMIC_TRIGGER_STOP);
+        k_msleep(5);
+
+        mic_side = MIC_SIDE_RIGHT;
+        err = dmic_configure_and_start(mic_side);
+        if (err) {
+            return;
+        }
+
+        probe_level = probe_pcm_level();
+        LOG_INF("Mic probe on RIGHT: mean_abs=%u", probe_level);
     }
 
     running = true;

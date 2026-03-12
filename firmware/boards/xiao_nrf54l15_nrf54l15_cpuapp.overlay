@@ -14,21 +14,6 @@
 		};
 	};
 
-	/* PDM microphone – CLK on D9 (P1.13), DIN on D8 (P1.14) */
-	pdm20_default_alt: pdm20_default_alt {
-		group1 {
-			psels = <NRF_PSEL(PDM_CLK, 1, 13)>,
-				<NRF_PSEL(PDM_DIN, 1, 14)>;
-		};
-	};
-
-	pdm20_sleep_alt: pdm20_sleep_alt {
-		group1 {
-			psels = <NRF_PSEL(PDM_CLK, 1, 13)>,
-				<NRF_PSEL(PDM_DIN, 1, 14)>;
-			low-power-enable;
-		};
-	};
 };
 
 &spi00 {
@@ -85,8 +70,7 @@
 /* PDM microphone (Zephyr DMIC API) */
 &pdm20 {
 	status = "okay";
-	pinctrl-0 = <&pdm20_default_alt>;
-	pinctrl-1 = <&pdm20_sleep_alt>;
-	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&pdm20_default>;
+	pinctrl-names = "default";
 	clock-source = "PCLK32M";
 };
