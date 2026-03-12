@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -204,12 +205,87 @@ class BleAudioService {
 
     try {
       final pcmData = _lc3Decoder!.decodeFrames(_recordedFrames);
+      final peak = _pcmPeakAbs(pcmData);
+      final rms = _pcmRms(pcmData);
+
+      _log('[DECODE] PCM stats: peak=$peak rms=${rms.toStringAsFixed(1)}');
+
+      final normalizedPcm = _normalizePcmIfNeeded(pcmData, peak);
+
       _log('[DECODE] Decoded ${_recordedFrames.length} LC3 frames '
-          '→ ${pcmData.length} bytes PCM');
-      return _wrapInWav(pcmData);
+          '→ ${normalizedPcm.length} bytes PCM');
+      return _wrapInWav(normalizedPcm);
     } finally {
       _lc3Decoder!.dispose();
     }
+  }
+
+  static int _pcmPeakAbs(Uint8List pcmBytes) {
+    final byteData = ByteData.sublistView(pcmBytes);
+    int peak = 0;
+
+    for (int i = 0; i + 1 < pcmBytes.length; i += 2) {
+      final sample = byteData.getInt16(i, Endian.little).abs();
+      if (sample > peak) {
+        peak = sample;
+      }
+    }
+
+    return peak;
+  }
+
+  static double _pcmRms(Uint8List pcmBytes) {
+    final byteData = ByteData.sublistView(pcmBytes);
+    if (pcmBytes.length < 2) {
+      return 0;
+    }
+
+    double sumSquares = 0;
+    int count = 0;
+
+    for (int i = 0; i + 1 < pcmBytes.length; i += 2) {
+      final sample = byteData.getInt16(i, Endian.little).toDouble();
+      sumSquares += sample * sample;
+      count++;
+    }
+
+    if (count == 0) {
+      return 0;
+    }
+
+    return math.sqrt(sumSquares / count);
+  }
+
+  Uint8List _normalizePcmIfNeeded(Uint8List pcmBytes, int peak) {
+    if (peak == 0) {
+      _log('[DECODE] PCM is all-zero after decode');
+      return pcmBytes;
+    }
+
+    const targetPeak = 12000;
+    const minUsefulPeak = 800;
+    if (peak >= minUsefulPeak) {
+      return pcmBytes;
+    }
+
+    final gain = (targetPeak / peak).clamp(1.0, 24.0);
+    _log('[DECODE] Applying gain x${gain.toStringAsFixed(2)} (peak=$peak)');
+
+    final input = ByteData.sublistView(pcmBytes);
+    final out = ByteData(pcmBytes.length);
+
+    for (int i = 0; i + 1 < pcmBytes.length; i += 2) {
+      final s = input.getInt16(i, Endian.little);
+      int v = (s * gain).round();
+      if (v > 32767) {
+        v = 32767;
+      } else if (v < -32768) {
+        v = -32768;
+      }
+      out.setInt16(i, v, Endian.little);
+    }
+
+    return out.buffer.asUint8List();
   }
 
   static Uint8List _wrapInWav(Uint8List pcmBytes) {
@@ -260,8 +336,15 @@ class BleAudioService {
 
     final seq = value[0] | (value[1] << 8);
     final len = value[2] | (value[3] << 8);
-    final payload =
-        Uint8List.fromList(value.sublist(audioFrameHeaderSize));
+    final payloadLen = value.length - audioFrameHeaderSize;
+    if (len <= 0 || payloadLen < len) {
+      _log('[AUDIO] Invalid frame seq=$seq hdr_len=$len payload_len=$payloadLen, ignoring');
+      return;
+    }
+
+    final payload = Uint8List.fromList(
+      value.sublist(audioFrameHeaderSize, audioFrameHeaderSize + len),
+    );
 
     _log('[AUDIO] Frame seq=$seq len=$len');
     _recordedFrames.add(payload);

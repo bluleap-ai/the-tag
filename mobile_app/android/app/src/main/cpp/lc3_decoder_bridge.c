@@ -44,7 +44,7 @@ EXPORT Lc3DecoderCtx *lc3_decoder_create(int dt_us, int sr_hz) {
     void *mem = malloc(size);
     if (!mem) return NULL;
 
-    lc3_decoder_t dec = lc3_setup_decoder(dt_us, sr_hz, 0, mem);
+    lc3_decoder_t dec = lc3_setup_decoder(dt_us, sr_hz, sr_hz, mem);
     if (!dec) {
         free(mem);
         return NULL;
@@ -86,7 +86,8 @@ EXPORT int lc3_decoder_decode_frame(
         const uint8_t *in_data,
         int in_bytes,
         int16_t *out_pcm) {
-    if (!ctx || !in_data || !out_pcm) return -1;
+    if (!ctx || !out_pcm) return -1;
+    if (in_data == NULL && in_bytes != 0) return -1;
 
     return lc3_decode(ctx->decoder, in_data, in_bytes,
                       LC3_PCM_FORMAT_S16, out_pcm, 1);
