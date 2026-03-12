@@ -29,8 +29,7 @@ static uint16_t frame_seq;
 
 /* LC3 encoder state */
 static lc3_encoder_t lc3_encoder;
-static uint8_t lc3_encoder_mem[LC3_ENCODER_BUFFER_SIZE(AUDIO_FRAME_DURATION_US,
-                                                        AUDIO_SAMPLE_RATE_HZ)];
+static lc3_encoder_mem_16k_t lc3_encoder_mem;
 static uint8_t lc3_output_buf[AUDIO_FRAME_BYTES];
 
 /* Capture thread */
@@ -51,9 +50,9 @@ static void mic_capture_thread(void *p1, void *p2, void *p3)
 
     while (running) {
         void *pcm_buf = NULL;
-        uint32_t pcm_size = MIC_PCM_BUF_SIZE;
+        size_t pcm_size = MIC_PCM_BUF_SIZE;
 
-        int err = dmic_read(mic_dev, 0, &pcm_buf, &pcm_size, K_MSEC(200));
+        int err = dmic_read(mic_dev, 0, &pcm_buf, &pcm_size, 200);
         if (err) {
             LOG_WRN("DMIC read error: %d", err);
             continue;
@@ -84,7 +83,7 @@ static void mic_capture_thread(void *p1, void *p2, void *p3)
 
 int mic_driver_init(void)
 {
-    mic_dev = DEVICE_DT_GET(DT_NODELABEL(dmic0));
+    mic_dev = DEVICE_DT_GET(DT_ALIAS(dmic0));
     if (!device_is_ready(mic_dev)) {
         LOG_ERR("DMIC device not ready");
         return -ENODEV;
@@ -93,7 +92,7 @@ int mic_driver_init(void)
     lc3_encoder = lc3_setup_encoder(AUDIO_FRAME_DURATION_US,
                                     AUDIO_SAMPLE_RATE_HZ,
                                     AUDIO_SAMPLE_RATE_HZ,
-                                    lc3_encoder_mem);
+                                    &lc3_encoder_mem);
     if (!lc3_encoder) {
         LOG_ERR("Failed to initialise LC3 encoder");
         return -ENOMEM;

@@ -28,6 +28,7 @@ manifest:
           - tinycrypt
           - picolibc
           - mcumgr
+          - liblc3
           - zcbor
           - segger
           - stream_flash
