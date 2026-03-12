@@ -13,11 +13,6 @@ manifest:
       url-base: https://github.com/nrfconnect
 
   projects:
-    - name: mcuboot
-      path: bootloader/mcuboot
-      url: git@github.com:bluleap-ai/mcuboot-etag.git
-      revision: main
-
     - name: nrf
       repo-path: sdk-nrf
       revision: v3.2.4
