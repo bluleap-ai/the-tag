@@ -61,11 +61,9 @@ static void audio_data_ccc_changed(const struct bt_gatt_attr *attr, uint16_t val
     LOG_INF("Audio data notifications %s",
             data_notifications_enabled ? "enabled" : "disabled");
 
-    if (data_notifications_enabled) {
-        mic_driver_start();
-    } else {
-        mic_driver_stop();
-    }
+    /* Mic start/stop is driven by the explicit CMD_START / CMD_STOP
+     * commands on the control characteristic – not by CCC toggling –
+     * to avoid a double-start race and to give the app full control. */
 }
 
 static void audio_ctrl_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
