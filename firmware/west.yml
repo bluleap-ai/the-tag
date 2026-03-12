@@ -1,38 +1,24 @@
 manifest:
   version: "1.0"
   defaults:
-    remote: the-tag
+    remote: ncs
     revision: main
 
   self:
     path: the-tag
-    west-commands: scritps/west-commands.yml
+    west-commands: scripts/west-commands.yml
 
   remotes:
-    - name: the-tag
-      url-base: https://github.com/bluleap-ai/the-tag
-    - name: zephyrproject-rtos
-      url-base: https://github.com/zephyrproject-rtos
+    - name: ncs
+      url-base: https://github.com/nrfconnect
 
   projects:
-    - name: zephyr
-      remote: zephyrproject-rtos
-      revision: main
-      import:
-        name-allowlist:
-          - cmsis
-          - cmsis_6
-          - hal_nordic
-          - nrfx
-          - mbedtls
-          - tinycrypt
-          - picolibc
-          - mcumgr
-          - zcbor
-          - segger
-          - stream_flash
-
-    - name: mcuboot_blueleap
+    - name: mcuboot
       path: bootloader/mcuboot
       url: git@github.com:bluleap-ai/mcuboot-etag.git
       revision: main
+
+    - name: nrf
+      repo-path: sdk-nrf
+      revision: v3.2.4
+      import: true

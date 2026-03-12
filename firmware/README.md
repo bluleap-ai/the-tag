@@ -21,9 +21,22 @@
 
 # 🚀 Getting Started
 
-This project uses **West** (Zephyr’s meta-tool) to manage the workspace and modules.
+This project uses **West** (Zephyr’s meta-tool) together with the **Nordic Connect SDK (NCS) v3.2.4** to manage the workspace and modules.
 
-Follow the steps below to initialize, build, and flash the firmware.
+Follow the steps below to set up the NCS toolchain, initialize the workspace, build, and flash the firmware.
+
+---
+
+## 🔧 0️⃣ Prerequisites: Install NCS Toolchain
+
+Install the [nRF Connect SDK v3.2.4 toolchain](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/installation.html) using the **nRF Connect for Desktop** application:
+
+1. Download and install [nRF Connect for Desktop](https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-Desktop).
+2. Open the **Toolchain Manager** extension.
+3. Install the **nRF Connect SDK v3.2.4** toolchain.
+4. Open a terminal from the Toolchain Manager (this pre-configures PATH for `west`, CMake, and the Zephyr SDK).
+
+Alternatively, install the toolchain manually by following the [NCS Getting Started guide](https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/installation/install_ncs.html).
 
 ---
 
@@ -36,6 +49,8 @@ west init -m git@github.com:bluleap-ai/the-tag.git --mr main etag
 cd etag
 west update
 ```
+
+> **Note:** `west update` fetches NCS v3.2.4 (`sdk-nrf`) and all its dependencies (including the NCS-integrated Zephyr fork). This replaces the previous dependency on upstream Zephyr `main`.
 
 ## 🛠️ 2️⃣ Build the Firmware
 
