@@ -5,8 +5,7 @@ manifest:
     revision: main
 
   self:
-    path: the-tag
-    west-commands: scripts/west-commands.yml
+    path: west-manifest
 
   remotes:
     - name: ncs

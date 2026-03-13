@@ -42,11 +42,11 @@ Alternatively, install the toolchain manually by following the [NCS Getting Star
 
 ## 📦 1️⃣ Initialize the Workspace
 
-Initialize the workspace directly from this repository:
+Initialize a local workspace inside the `firmware/` directory:
 
 ```bash
-west init -m git@github.com:bluleap-ai/the-tag.git --mr main etag
-cd etag
+cd firmware
+west init -l west-manifest
 west update
 ```
 
@@ -57,13 +57,13 @@ west update
 ### Build for Seeed XIAO nRF54L15 (CPUAPP core) debug mode:
 
 ```bash
-west build -b xiao_nrf54l15/nrf54l15/cpuapp the-tag -p
+west build -b xiao_nrf54l15/nrf54l15/cpuapp . -p
 ```
 
 ### Or Build for Seeed XIAO nRF54L15 (CPUAPP core) using sysbuild:
 
 ```bash
-west build -b xiao_nrf54l15/nrf54l15/cpuapp the-tag --sysbuild -p
+west build -b xiao_nrf54l15/nrf54l15/cpuapp . --sysbuild -p
 ```
 
 ## 🔥 3️⃣ Flash the Device

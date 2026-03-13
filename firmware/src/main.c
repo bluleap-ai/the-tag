@@ -102,7 +102,7 @@ static void jd79661_write_data_bulk(const uint8_t *data, size_t len)
     gpio_pin_set_dt(&cs_gpio, 0);  // CS inactive (high)
 }
 
-static void jd79661_wait_busy(void)
+static bool jd79661_wait_busy(void)
 {
     int cnt = 0;
     /* BUSY=0 means busy, BUSY=1 means idle */
@@ -111,11 +111,12 @@ static void jd79661_wait_busy(void)
         k_msleep(10);
         cnt++;
         if (cnt > 500) { // 5s timeout
-            LOG_ERR("Busy timeout!");
-            break;
+            LOG_WRN("Busy timeout, continue anyway");
+            return false;
         }
     }
     LOG_INF("Busy released");
+    return true;
 }
 
 static void jd79661_reset(void)
@@ -132,7 +133,7 @@ static int jd79661_init(void)
     LOG_INF("Initializing JD79661...");
     
     jd79661_reset();
-    jd79661_wait_busy();
+    (void)jd79661_wait_busy();
     
     // Initialization sequence from STM32 sample code
     jd79661_write_cmd(0x4D);
@@ -206,7 +207,7 @@ static int jd79661_init(void)
     k_usleep(100);
     
     jd79661_write_cmd(0x04);  // Power on
-    jd79661_wait_busy();
+    (void)jd79661_wait_busy();
     
     LOG_INF("JD79661 initialized");
     return 0;
@@ -222,7 +223,7 @@ static void jd79661_display_frame(const uint8_t *buffer, size_t size)
     LOG_INF("Refreshing display...");
     jd79661_write_cmd(0x12);  // Display refresh
     jd79661_write_data(0x00);
-    jd79661_wait_busy();
+    (void)jd79661_wait_busy();
     
     LOG_INF("Display update complete");
 }

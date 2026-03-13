@@ -1,2 +1,12 @@
 .west
 build
+
+# Local NCS workspace deps cloned by west update
+bootloader/
+modules/
+nrf/
+nrfxlib/
+test/
+tools/
+zephyr/
+west-manifest/

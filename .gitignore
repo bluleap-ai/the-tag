@@ -1,2 +1,23 @@
 .west
 build
+
+# Local west workspace artifacts (root)
+bootloader/
+modules/
+nrf/
+nrfxlib/
+test/
+tools/
+zephyr/
+
+# Local west workspace artifacts (firmware sub-workspace)
+firmware/bootloader/
+firmware/modules/
+firmware/nrf/
+firmware/nrfxlib/
+firmware/test/
+firmware/tools/
+firmware/zephyr/
+firmware/.west/
+firmware/build/
+firmware/west-manifest/
