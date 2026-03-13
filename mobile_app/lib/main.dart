@@ -4,6 +4,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
+import 'audio_tab.dart';
 import 'services/ble_image_transfer.dart';
 import 'services/image_converter.dart';
 
@@ -41,7 +42,41 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _TabShell(tabController: _tabController);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shell that owns the BLE connection and hands the device to both tabs
+// ---------------------------------------------------------------------------
+
+class _TabShell extends StatefulWidget {
+  final TabController tabController;
+  const _TabShell({required this.tabController});
+
+  @override
+  State<_TabShell> createState() => _TabShellState();
+}
+
+class _TabShellState extends State<_TabShell> {
   final BleImageTransfer _ble = BleImageTransfer();
   final ImagePicker _picker = ImagePicker();
   final List<String> _logs = [];
@@ -231,267 +266,290 @@ class _HomePageState extends State<HomePage> {
               onPressed: isBusy ? null : () => _ble.disconnect(),
             ),
         ],
+        bottom: TabBar(
+          controller: widget.tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.image), text: 'Image'),
+            Tab(icon: Icon(Icons.mic), text: 'Audio'),
+          ],
+        ),
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+        child: TabBarView(
+          controller: widget.tabController,
           children: [
-            // --- BLE Connection ---
-            _SectionCard(
-              title: 'BLE Connection',
-              icon: Icons.bluetooth,
-              trailing: _buildStatusChip(),
-              children: [
-                if (!isConnected) ...[
-                  FilledButton.icon(
-                    onPressed: _scanning ? null : _startScan,
-                    icon: _scanning
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.bluetooth_searching),
-                    label: Text(_scanning ? 'Scanning...' : 'Scan for Devices'),
-                  ),
-                  if (_scanResults.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Column(
-                        children: _scanResults.map((r) {
-                          final name = r.device.platformName.isNotEmpty
-                              ? r.device.platformName
-                              : 'Unknown';
-                          return ListTile(
-                            leading: const Icon(Icons.devices),
-                            title: Text(name),
-                            subtitle:
-                                Text(r.device.remoteId.toString()),
-                            trailing:
-                                Text('${r.rssi} dBm'),
-                            onTap: () => _connectDevice(r.device),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          );
-                        }).toList(),
-                      ),
-                    ),
-                ] else ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.check_circle,
-                          color: Colors.green, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Connected to ${_ble.connectedDevice?.platformName ?? "device"}',
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
+            // ── Image tab ────────────────────────────────────────────────
+            _buildImageTab(theme, isConnected, isBusy),
 
-            const SizedBox(height: 12),
-
-            // --- Image Selection ---
-            _SectionCard(
-              title: 'Image',
-              icon: Icons.image,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: _pickImage,
-                        icon: const Icon(Icons.photo_library),
-                        label: const Text('Gallery'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: _takePhoto,
-                        icon: const Icon(Icons.camera_alt),
-                        label: const Text('Camera'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_converting)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 16),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                if (_originalImageBytes != null && _previewImage != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('Original',
-                                  style: theme.textTheme.labelSmall),
-                              const SizedBox(height: 4),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.memory(
-                                  _originalImageBytes!,
-                                  width: 152,
-                                  height: 152,
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.arrow_forward),
-                        ),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              Text('E-Ink Preview',
-                                  style: theme.textTheme.labelSmall),
-                              const SizedBox(height: 4),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.memory(
-                                  Uint8List.fromList(
-                                      img.encodePng(_previewImage!)),
-                                  width: 152,
-                                  height: 152,
-                                  fit: BoxFit.contain,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-
-            // --- Transfer ---
-            if (isConnected && _convertedBuffer != null)
-              _SectionCard(
-                title: 'Transfer',
-                icon: Icons.send,
-                children: [
-                  if (isBusy) ...[
-                    LinearProgressIndicator(
-                      value: _bleState == TransferState.sending
-                          ? _progress
-                          : null,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _bleState == TransferState.sending
-                          ? 'Sending: ${(_progress * 100).toInt()}%'
-                          : 'Refreshing display...',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ] else ...[
-                    FilledButton.icon(
-                      onPressed: _sendImage,
-                      icon: const Icon(Icons.send),
-                      label: Text(
-                          'Send to Display (${_convertedBuffer!.length} bytes)'),
-                    ),
-                    if (_bleState == TransferState.done)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.check_circle,
-                                color: Colors.green, size: 18),
-                            const SizedBox(width: 6),
-                            Text('Image displayed successfully!',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                    color: Colors.green)),
-                          ],
-                        ),
-                      ),
-                    if (_bleState == TransferState.error)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.error,
-                                color: Colors.red, size: 18),
-                            const SizedBox(width: 6),
-                            Text('Transfer failed',
-                                style: theme.textTheme.bodySmall
-                                    ?.copyWith(color: Colors.red)),
-                          ],
-                        ),
-                      ),
-                  ],
-                ],
-              ),
-
-            const SizedBox(height: 12),
-
-            // --- Log ---
-            _SectionCard(
-              title: 'Log (${_logs.length})',
-              icon: Icons.terminal,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.copy, size: 18),
-                    tooltip: 'Copy all logs',
-                    onPressed: _logs.isEmpty ? null : _copyLogs,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    tooltip: 'Clear logs',
-                    onPressed: _logs.isEmpty ? null : _clearLogs,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-              ),
-              children: [
-                Container(
-                  height: 220,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SelectionArea(
-                    child: ListView.builder(
-                      controller: _logScrollController,
-                      padding: const EdgeInsets.all(8),
-                      reverse: true,
-                      itemCount: _logs.length,
-                      itemBuilder: (_, i) {
-                        final idx = _logs.length - 1 - i;
-                        return Text(
-                          _logs[idx],
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            fontFamily: 'monospace',
-                            fontSize: 10,
-                            height: 1.4,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
+            // ── Audio tab ────────────────────────────────────────────────
+            AudioTab(
+              connectedDevice: _ble.connectedDevice,
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildImageTab(
+      ThemeData theme, bool isConnected, bool isBusy) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // --- BLE Connection ---
+        _SectionCard(
+          title: 'BLE Connection',
+          icon: Icons.bluetooth,
+          trailing: _buildStatusChip(),
+          children: [
+            if (!isConnected) ...[
+              FilledButton.icon(
+                onPressed: _scanning ? null : _startScan,
+                icon: _scanning
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.bluetooth_searching),
+                label: Text(_scanning ? 'Scanning...' : 'Scan for Devices'),
+              ),
+              if (_scanResults.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    children: _scanResults.map((r) {
+                      final name = r.device.platformName.isNotEmpty
+                          ? r.device.platformName
+                          : 'Unknown';
+                      return ListTile(
+                        leading: const Icon(Icons.devices),
+                        title: Text(name),
+                        subtitle:
+                            Text(r.device.remoteId.toString()),
+                        trailing:
+                            Text('${r.rssi} dBm'),
+                        onTap: () => _connectDevice(r.device),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      );
+                    }).toList(),
+                  ),
+                ),
+            ] else ...[
+              Row(
+                children: [
+                  const Icon(Icons.check_circle,
+                      color: Colors.green, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Connected to ${_ble.connectedDevice?.platformName ?? "device"}',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+
+        const SizedBox(height: 12),
+
+        // --- Image Selection ---
+        _SectionCard(
+          title: 'Image',
+          icon: Icons.image,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: _pickImage,
+                    icon: const Icon(Icons.photo_library),
+                    label: const Text('Gallery'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: _takePhoto,
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('Camera'),
+                  ),
+                ),
+              ],
+            ),
+            if (_converting)
+              const Padding(
+                padding: EdgeInsets.only(top: 16),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            if (_originalImageBytes != null && _previewImage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Text('Original',
+                              style: theme.textTheme.labelSmall),
+                          const SizedBox(height: 4),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(
+                              _originalImageBytes!,
+                              width: 152,
+                              height: 152,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Icon(Icons.arrow_forward),
+                    ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          Text('E-Ink Preview',
+                              style: theme.textTheme.labelSmall),
+                          const SizedBox(height: 4),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(
+                              Uint8List.fromList(
+                                  img.encodePng(_previewImage!)),
+                              width: 152,
+                              height: 152,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+
+        const SizedBox(height: 12),
+
+        // --- Transfer ---
+        if (isConnected && _convertedBuffer != null)
+          _SectionCard(
+            title: 'Transfer',
+            icon: Icons.send,
+            children: [
+              if (isBusy) ...[
+                LinearProgressIndicator(
+                  value: _bleState == TransferState.sending
+                      ? _progress
+                      : null,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _bleState == TransferState.sending
+                      ? 'Sending: ${(_progress * 100).toInt()}%'
+                      : 'Refreshing display...',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ] else ...[
+                FilledButton.icon(
+                  onPressed: _sendImage,
+                  icon: const Icon(Icons.send),
+                  label: Text(
+                      'Send to Display (${_convertedBuffer!.length} bytes)'),
+                ),
+                if (_bleState == TransferState.done)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            color: Colors.green, size: 18),
+                        const SizedBox(width: 6),
+                        Text('Image displayed successfully!',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: Colors.green)),
+                      ],
+                    ),
+                  ),
+                if (_bleState == TransferState.error)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error,
+                            color: Colors.red, size: 18),
+                        const SizedBox(width: 6),
+                        Text('Transfer failed',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: Colors.red)),
+                      ],
+                    ),
+                  ),
+              ],
+            ],
+          ),
+
+        const SizedBox(height: 12),
+
+        // --- Log ---
+        _SectionCard(
+          title: 'Log (${_logs.length})',
+          icon: Icons.terminal,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.copy, size: 18),
+                tooltip: 'Copy all logs',
+                onPressed: _logs.isEmpty ? null : _copyLogs,
+                visualDensity: VisualDensity.compact,
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 18),
+                tooltip: 'Clear logs',
+                onPressed: _logs.isEmpty ? null : _clearLogs,
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+          children: [
+            Container(
+              height: 220,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectionArea(
+                child: ListView.builder(
+                  controller: _logScrollController,
+                  padding: const EdgeInsets.all(8),
+                  reverse: true,
+                  itemCount: _logs.length,
+                  itemBuilder: (_, i) {
+                    final idx = _logs.length - 1 - i;
+                    return Text(
+                      _logs[idx],
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 

@@ -5,8 +5,13 @@
 #include <zephyr/settings/settings.h>
 
 #include "ble_image_service.h"
+#include "mic_driver.h"
 
 LOG_MODULE_REGISTER(ble_backend);
+
+/* Work item to restart advertising from the system workqueue
+ * (must not block the BT RX thread in the disconnected callback). */
+static struct k_work adv_restart_work;
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -30,6 +35,12 @@ static void start_adv(void)
 	LOG_INF("Advertising successfully started");
 }
 
+static void adv_restart_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	start_adv();
+}
+
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
@@ -42,7 +53,14 @@ static void connected(struct bt_conn *conn, uint8_t err)
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	LOG_INF("Disconnected, reason 0x%02x %s", reason, bt_hci_err_to_str(reason));
-	start_adv();
+
+	/* Stop mic capture if still running (prevents resource leak) */
+	mic_driver_stop();
+
+	/* Defer advertising restart to the system workqueue so we do not
+	 * block the BT RX thread – the stack needs to finish connection
+	 * cleanup before bt_le_adv_start() can succeed. */
+	k_work_submit(&adv_restart_work);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -87,7 +105,8 @@ void ble_backend_init(void)
 	}
 	
 	settings_load();
-	
+
+	k_work_init(&adv_restart_work, adv_restart_work_handler);
 	bt_conn_auth_cb_register(&auth_cb_display);
 
 	start_adv();

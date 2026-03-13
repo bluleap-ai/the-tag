@@ -13,6 +13,7 @@
 			low-power-enable;
 		};
 	};
+
 };
 
 &spi00 {
@@ -39,7 +40,8 @@
 	};
 
 	aliases {
-		led0 = &led0;
+		led0  = &led0;
+		dmic0 = &pdm20;
 	};
 
 	mipi_dbi_epaper: mipi-dbi-epaper {
@@ -63,4 +65,12 @@
 			rotation = <0>;
 		};
 	};
+};
+
+/* PDM microphone (Zephyr DMIC API) */
+&pdm20 {
+	status = "okay";
+	pinctrl-0 = <&pdm20_default>;
+	pinctrl-names = "default";
+	clock-source = "PCLK32M";
 };
