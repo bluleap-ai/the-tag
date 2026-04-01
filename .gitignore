@@ -9,6 +9,7 @@ nrfxlib/
 test/
 tools/
 zephyr/
+/S-GDEY0154F51/S-GDEY0154F51-4G-20230809/OBJ
 
 # Local west workspace artifacts (firmware sub-workspace)
 firmware/bootloader/

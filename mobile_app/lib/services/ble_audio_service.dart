@@ -7,15 +7,24 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'lc3_decoder.dart';
 
 // ---------------------------------------------------------------------------
-// BLE UUID constants – must match firmware ble_audio_service.h
+// BLE UUID constants – must match firmware
 // ---------------------------------------------------------------------------
 
+// E-ink firmware audio UUIDs
 final Guid audioServiceUuid =
     Guid('12345678-1234-5678-1234-56789abcdef3');
 final Guid audioDataCharUuid =
     Guid('12345678-1234-5678-1234-56789abcdef4');
 final Guid audioCtrlCharUuid =
     Guid('12345678-1234-5678-1234-56789abcdef5');
+
+// omiGlass/veea firmware audio UUIDs (under OMI service)
+final Guid omiAudioServiceUuid =
+    Guid('19b10000-e8f2-537e-4f6c-d104768a1214');
+final Guid omiAudioDataCharUuid =
+    Guid('19b10001-e8f2-537e-4f6c-d104768a1214');
+final Guid omiAudioCtrlCharUuid =
+    Guid('19b10002-e8f2-537e-4f6c-d104768a1214');
 
 // Control commands (phone → firmware)
 const int audioCmdStart = 0x01;
@@ -97,7 +106,9 @@ class BleAudioService {
   }
 
   void _log(String msg) {
-    _logController.add('${_ts()} $msg');
+    final logLine = '${_ts()} $msg';
+    print(logLine);
+    _logController.add(logLine);
   }
 
   // -------------------------------------------------------------------------
@@ -111,24 +122,43 @@ class BleAudioService {
     final services = await device.discoverServices();
 
     BluetoothService? audioSvc;
+    Guid? matchedDataUuid;
+    Guid? matchedCtrlUuid;
+
+    // Try e-ink audio service UUID first
     for (final s in services) {
       if (s.serviceUuid == audioServiceUuid) {
         audioSvc = s;
+        matchedDataUuid = audioDataCharUuid;
+        matchedCtrlUuid = audioCtrlCharUuid;
+        _log('[AUDIO] Found e-ink audio service');
         break;
       }
     }
 
+    // Try omiGlass/veea audio service UUID
     if (audioSvc == null) {
-      _log('[AUDIO] ERROR: Audio service $audioServiceUuid not found');
+      for (final s in services) {
+        if (s.serviceUuid == omiAudioServiceUuid) {
+          audioSvc = s;
+          matchedDataUuid = omiAudioDataCharUuid;
+          matchedCtrlUuid = omiAudioCtrlCharUuid;
+          _log('[AUDIO] Found omiGlass audio service');
+          break;
+        }
+      }
+    }
+
+    if (audioSvc == null) {
+      _log('[AUDIO] ERROR: No audio service found (tried e-ink and omiGlass UUIDs)');
       _setState(AudioStreamState.error);
       throw Exception('Audio service not found on device');
     }
-    _log('[AUDIO] Audio service found');
 
     for (final c in audioSvc.characteristics) {
-      if (c.characteristicUuid == audioDataCharUuid) {
+      if (c.characteristicUuid == matchedDataUuid) {
         _dataChar = c;
-      } else if (c.characteristicUuid == audioCtrlCharUuid) {
+      } else if (c.characteristicUuid == matchedCtrlUuid) {
         _ctrlChar = c;
       }
     }

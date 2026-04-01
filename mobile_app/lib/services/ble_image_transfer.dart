@@ -3,7 +3,9 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import '../models/device_type.dart';
 import 'image_converter.dart';
+import 'omiglass_protocol.dart';
 
 final Guid imageServiceUuid =
     Guid('12345678-1234-5678-1234-56789abcdef0');
@@ -41,10 +43,18 @@ enum TransferState {
 
 class BleImageTransfer {
   BluetoothDevice? _device;
+  DeviceType _deviceType = DeviceType.unknown;
+  
+  // E-ink protocol (existing)
   BluetoothCharacteristic? _dataChar;
   BluetoothCharacteristic? _ctrlChar;
   StreamSubscription? _ctrlNotifySub;
   StreamSubscription? _connectionSub;
+  
+  // omiGlass protocol (new)
+  OmiGlassProtocol? _omiProtocol;
+  StreamSubscription? _omiImageSub;
+  StreamSubscription? _omiLogSub;
 
   final _stateController = StreamController<TransferState>.broadcast();
   final _progressController = StreamController<double>.broadcast();
@@ -58,6 +68,7 @@ class BleImageTransfer {
   TransferState get state => _state;
 
   BluetoothDevice? get connectedDevice => _device;
+  DeviceType get deviceType => _deviceType;
 
   String _ts() {
     final now = DateTime.now();
@@ -84,7 +95,6 @@ class BleImageTransfer {
     final results = <ScanResult>[];
 
     try {
-      // Wait for adapter to be ready (iOS reports "unknown" initially)
       var adapterState = FlutterBluePlus.adapterStateNow;
       _log('[BLE] Adapter state: $adapterState');
       if (adapterState != BluetoothAdapterState.on) {
@@ -103,32 +113,42 @@ class BleImageTransfer {
         }
       }
 
-      // Scan by device name instead of service UUID.
-      // iOS can miss service UUID filters if the UUID overflows the 31-byte ad packet.
-      _log('[BLE] Scanning by name "the-tag"...');
+      // NOTE: Do NOT use withNames filter here.
+      // On Android, OS-level name filters only check the primary advertising
+      // packet. If the firmware puts the device name in the scan response
+      // packet (sd[]), Android will never pass the result through, even though
+      // nRF Connect (which scans without filter) can see it fine.
+      // We scan for everything and filter manually below.
+      _log('[BLE] Scanning (no filter) – will match name "the-tag" manually...');
 
       final scanSub = FlutterBluePlus.onScanResults.listen((scanResults) {
         for (final sr in scanResults) {
-          if (!results.any((e) => e.device.remoteId == sr.device.remoteId)) {
-            results.add(sr);
+          final name = sr.advertisementData.advName.isNotEmpty
+              ? sr.advertisementData.advName
+              : sr.device.platformName;
+
+          // Log every unique device seen (useful for debugging)
+          final isNew = !results.any((e) => e.device.remoteId == sr.device.remoteId);
+          final isTarget = name == 'the-tag';
+
+          if (isNew) {
             final advUuids = sr.advertisementData.serviceUuids
                 .map((u) => u.toString())
                 .join(', ');
-            _log('[BLE] Found: "${sr.device.platformName}" '
-                '(${sr.device.remoteId}) RSSI=${sr.rssi} dBm');
-            _log('[BLE]   advName="${sr.advertisementData.advName}" '
-                'connectable=${sr.advertisementData.connectable}');
+            _log('[BLE] Seen: "$name" (${sr.device.remoteId}) '
+                'RSSI=${sr.rssi} dBm connectable=${sr.advertisementData.connectable}');
             _log('[BLE]   serviceUuids=[$advUuids]');
+
+            if (isTarget) {
+              results.add(sr);
+              _log('[BLE] ✓ Matched target device: "$name"');
+            }
           }
         }
       });
 
-      await FlutterBluePlus.startScan(
-        withNames: ['the-tag'],
-        timeout: timeout,
-      );
+      await FlutterBluePlus.startScan(timeout: timeout);
 
-      // Wait for scanning to finish
       await FlutterBluePlus.isScanning.where((s) => s == false).first;
       await scanSub.cancel();
     } catch (e, st) {
@@ -166,62 +186,120 @@ class BleImageTransfer {
         _log('[BLE]   svc ${s.serviceUuid} (${s.characteristics.length} chars)');
       }
 
-      BluetoothService? imgService;
+      // Detect device type by service UUID
+      _deviceType = DeviceType.unknown;
       for (final s in services) {
         if (s.serviceUuid == imageServiceUuid) {
-          imgService = s;
+          _deviceType = DeviceType.eink;
+          _log('[BLE] Device type: E-ink Display');
+          break;
+        } else if (s.serviceUuid == omiServiceUuid) {
+          _deviceType = DeviceType.camera;
+          _log('[BLE] Device type: Camera Wearable (omiGlass)');
           break;
         }
       }
 
-      if (imgService == null) {
-        _log('[BLE] ERROR: Image service $imageServiceUuid not found!');
-        throw Exception('Image service not found on device');
+      if (_deviceType == DeviceType.unknown) {
+        _log('[BLE] ERROR: Unknown device type (no matching service UUID)');
+        throw Exception('Unknown device type');
       }
-      _log('[BLE] Image service found');
-
-      for (final c in imgService.characteristics) {
-        final props = c.properties;
-        _log('[BLE]   char ${c.characteristicUuid} '
-            'props=[${_charPropsStr(props)}]');
-        if (c.characteristicUuid == imageDataCharUuid) {
-          _dataChar = c;
-        } else if (c.characteristicUuid == imageCtrlCharUuid) {
-          _ctrlChar = c;
-        }
-      }
-
-      if (_dataChar == null) {
-        _log('[BLE] ERROR: Data characteristic $imageDataCharUuid not found');
-        throw Exception('Data characteristic not found');
-      }
-      if (_ctrlChar == null) {
-        _log('[BLE] ERROR: Control characteristic $imageCtrlCharUuid not found');
-        throw Exception('Control characteristic not found');
-      }
-
-      if (!Platform.isIOS) {
-        _log('[BLE] Requesting MTU 247...');
-        final newMtu = await device.requestMtu(247);
-        _log('[BLE] MTU negotiated: $newMtu');
-      } else {
-        _log('[BLE] iOS: MTU auto-negotiated (${device.mtuNow})');
-      }
-
-      _log('[BLE] Enabling ctrl notifications...');
-      await _ctrlChar!.setNotifyValue(true);
-      _ctrlNotifySub = _ctrlChar!.onValueReceived.listen(_onCtrlNotify);
-      _log('[BLE] Ctrl notifications enabled');
 
       _device = device;
+
+      // Setup protocol based on device type
+      if (_deviceType == DeviceType.eink) {
+        await _setupEinkProtocol(services);
+      } else if (_deviceType == DeviceType.camera) {
+        await _setupOmiGlassProtocol();
+      }
+
       _setState(TransferState.connected);
-      _log('[BLE] Ready for image transfer (MTU=${device.mtuNow})');
+      _log('[BLE] Ready for image transfer');
     } catch (e, st) {
       _log('[BLE] Connection failed: $e');
       _log('[BLE] Stack: ${st.toString().split('\n').take(3).join(' | ')}');
       _setState(TransferState.error);
       rethrow;
     }
+  }
+
+  Future<void> _setupEinkProtocol(List<BluetoothService> services) async {
+    _log('[BLE] Setting up E-ink protocol...');
+    
+    BluetoothService? imgService;
+    for (final s in services) {
+      if (s.serviceUuid == imageServiceUuid) {
+        imgService = s;
+        break;
+      }
+    }
+
+    if (imgService == null) {
+      _log('[BLE] ERROR: Image service $imageServiceUuid not found!');
+      throw Exception('Image service not found on device');
+    }
+    
+    _log('[BLE] Image service found');
+
+    for (final c in imgService.characteristics) {
+      final props = c.properties;
+      _log('[BLE]   char ${c.characteristicUuid} '
+          'props=[${_charPropsStr(props)}]');
+      if (c.characteristicUuid == imageDataCharUuid) {
+        _dataChar = c;
+      } else if (c.characteristicUuid == imageCtrlCharUuid) {
+        _ctrlChar = c;
+      }
+    }
+
+    if (_dataChar == null) {
+      _log('[BLE] ERROR: Data characteristic $imageDataCharUuid not found');
+      throw Exception('Data characteristic not found');
+    }
+    if (_ctrlChar == null) {
+      _log('[BLE] ERROR: Control characteristic $imageCtrlCharUuid not found');
+      throw Exception('Control characteristic not found');
+    }
+
+    if (!Platform.isIOS) {
+      _log('[BLE] Requesting MTU 247...');
+      final newMtu = await _device!.requestMtu(247);
+      _log('[BLE] MTU negotiated: $newMtu');
+    } else {
+      _log('[BLE] iOS: MTU auto-negotiated (${_device!.mtuNow})');
+    }
+
+    _log('[BLE] Enabling ctrl notifications...');
+    await _ctrlChar!.setNotifyValue(true);
+    _ctrlNotifySub = _ctrlChar!.onValueReceived.listen(_onCtrlNotify);
+    _log('[BLE] Ctrl notifications enabled');
+    _log('[BLE] E-ink protocol ready (MTU=${_device!.mtuNow})');
+  }
+
+  Future<void> _setupOmiGlassProtocol() async {
+    _log('[BLE] Setting up omiGlass protocol...');
+    
+    _omiProtocol = OmiGlassProtocol();
+    final success = await _omiProtocol!.setup(_device!);
+    
+    if (!success) {
+      _log('[BLE] ERROR: Failed to setup omiGlass protocol');
+      throw Exception('Failed to setup omiGlass protocol');
+    }
+
+    // Forward omiGlass logs to our log stream
+    _omiLogSub = _omiProtocol!.logStream.listen((msg) {
+      _logController.add(msg);
+    });
+
+    // Forward received images to UI (can be handled by UI layer)
+    _omiImageSub = _omiProtocol!.imageStream.listen((imageData) {
+      _log('[OMI] Image received: ${imageData.length} bytes');
+      // UI can subscribe to _omiProtocol.imageStream directly
+    });
+
+    _log('[BLE] omiGlass protocol ready');
   }
 
   String _charPropsStr(CharacteristicProperties p) {
@@ -274,6 +352,23 @@ class BleImageTransfer {
   }
 
   Future<void> sendImage(Uint8List imageBuffer) async {
+    if (_device == null) {
+      _log('[SEND] ERROR: not connected');
+      throw Exception('Not connected');
+    }
+
+    // Route to appropriate protocol
+    if (_deviceType == DeviceType.eink) {
+      await _sendImageEink(imageBuffer);
+    } else if (_deviceType == DeviceType.camera) {
+      _log('[SEND] Camera devices receive images automatically - no send needed');
+      throw Exception('Camera devices do not support sending images');
+    } else {
+      throw Exception('Unknown device type');
+    }
+  }
+
+  Future<void> _sendImageEink(Uint8List imageBuffer) async {
     if (_dataChar == null || _ctrlChar == null) {
       _log('[SEND] ERROR: not connected (dataChar=${_dataChar != null}, ctrlChar=${_ctrlChar != null})');
       throw Exception('Not connected');
@@ -330,6 +425,9 @@ class BleImageTransfer {
     _log('[SEND] COMMIT written, waiting for firmware...');
   }
 
+  // Access to omiGlass image stream for UI
+  Stream<Uint8List>? get omiImageStream => _omiProtocol?.imageStream;
+
   Future<void> disconnect() async {
     if (_device != null) {
       _log('[BLE] Disconnecting from ${_device!.remoteId}...');
@@ -341,17 +439,30 @@ class BleImageTransfer {
   }
 
   void _cleanup() {
+    // E-ink protocol cleanup
     _ctrlNotifySub?.cancel();
     _ctrlNotifySub = null;
-    _connectionSub?.cancel();
-    _connectionSub = null;
     _dataChar = null;
     _ctrlChar = null;
+    
+    // omiGlass protocol cleanup
+    _omiImageSub?.cancel();
+    _omiImageSub = null;
+    _omiLogSub?.cancel();
+    _omiLogSub = null;
+    _omiProtocol?.cleanup();
+    _omiProtocol = null;
+    
+    // Common cleanup
+    _connectionSub?.cancel();
+    _connectionSub = null;
     _device = null;
+    _deviceType = DeviceType.unknown;
   }
 
   void dispose() {
     _cleanup();
+    _omiProtocol?.dispose();
     _stateController.close();
     _progressController.close();
     _logController.close();
